@@ -41,12 +41,12 @@ def create_combined_plot(data, title, filename):
     labels = data['categories']
     images = data['images']
     
-    # Inisialisasi dua subplot (atas untuk ukuran, bawah untuk kualitas)
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+    # Menambah tinggi figure agar label tidak terpotong (12 -> 14)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 14))
     x = np.arange(len(labels))
-    width = 0.2  # Lebar batang untuk setiap sampel citra
+    width = 0.2
     
-    # --- BAGIAN 1: GRAFIK UKURAN FILE (BAR CHART) ---
+    # 1. Bar Chart (Ukuran File) - Tidak berubah banyak
     for i, img_data in enumerate(images):
         # Mengatur posisi batang agar tidak tumpang tindih
         offset = (i - 1) * width
@@ -63,37 +63,39 @@ def create_combined_plot(data, title, filename):
 
     # --- BAGIAN 2: GRAFIK KUALITAS CITRA / PSNR (LINE CHART) ---
     for i, img_data in enumerate(images):
-        # Plot garis untuk setiap sampel citra
-        line = ax2.plot(labels, img_data['psnrs'], marker='o', label=img_data['name'], linewidth=2)
+        # Plot garis dan ambil warnanya
+        line = ax2.plot(labels, img_data['psnrs'], marker='o', label=img_data['name'], linewidth=2.5)
+        color = line[0].get_color()
         
-        # Menambahkan label angka presisi pada setiap titik koordinat (x, y)
+        # STRATEGI: Staggered Offset (i=0 -> 10, i=1 -> 25, i=2 -> 40)
+        # Menumpuk label secara vertikal agar tidak bertabrakan di titik X yang sama
+        y_label_offset = 10 + (i * 15) 
+        
         for j, val in enumerate(img_data['psnrs']):
             ax2.annotate(f'{val:.1f}', 
                          (labels[j], img_data['psnrs'][j]),
                          textcoords="offset points", 
-                         xytext=(0, 10), 
+                         xytext=(0, y_label_offset), 
                          ha='center', 
-                         fontsize=9,
-                         fontweight='bold')
+                         fontsize=10,
+                         fontweight='bold',
+                         color=color, # Warna teks sesuai warna garis
+                         bbox=dict(boxstyle='round,pad=0.2', fc='white', alpha=0.8, ec=color))
     
     ax2.set_ylabel('PSNR (dB)')
     ax2.set_title(f'{title} - Perbandingan Kualitas (PSNR)')
     
-    # Menyesuaikan batas atas sumbu Y agar label angka tidak terpotong
+    # Beri margin atas yang lebih luas (50 dB ekstra) agar label tertinggi tidak terpotong
     if images:
         max_psnr = max([max(img['psnrs']) for img in images])
-        ax2.set_ylim(bottom=0, top=max_psnr * 1.2)
+        ax2.set_ylim(0, max_psnr + 60) 
         
     ax2.grid(True, linestyle='--', alpha=0.6)
-    ax2.legend()
+    ax2.legend(loc='upper right')
 
-    # Mengatur tata letak agar rapi dan tidak saling bertumpuk
     plt.tight_layout()
-    
-    # Menyimpan grafik ke direktori hasil 
-    output_path = os.path.join(OUTPUT_DIR, filename)
-    plt.savefig(output_path)
-    print(f"Grafik berhasil disimpan: {output_path}")
+    plt.savefig(os.path.join(OUTPUT_DIR, filename))
+    print(f"Grafik diperbarui: {filename}")
 
 def process_assignment():
     image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
