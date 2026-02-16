@@ -15,103 +15,160 @@ def get_file_size(file_path):
     return os.path.getsize(file_path) / 1024
 
 def calculate_psnr(orig, processed):
-    """
-    Menghitung kualitas citra menggunakan PSNR (Peak Signal-to-Noise Ratio).
-    Semakin tinggi nilai dB, semakin mirip kualitasnya dengan gambar asli.
-    """
+    """Menghitung PSNR. Jika ukuran beda, processed di-upscale ke ukuran orig."""
     h, w = orig.shape[:2]
-    # Upscale kembali gambar hasil resize ke ukuran asli agar bisa dibandingkan
-    processed_up = cv2.resize(processed, (w, h), interpolation=cv2.INTER_CUBIC)
+    if processed.shape[:2] != (h, w):
+        processed = cv2.resize(processed, (w, h), interpolation=cv2.INTER_CUBIC)
     
-    # Fungsi bawaan OpenCV untuk menghitung PSNR
-    psnr = cv2.PSNR(orig, processed_up)
-    return psnr
+    # Pastikan jumlah channel sama untuk perhitungan (konversi ke gray jika perlu)
+    if len(orig.shape) == 3 and (len(processed.shape) == 2 or processed.shape[2] == 1):
+        orig_gray = cv2.cvtColor(orig, cv2.COLOR_BGR2GRAY)
+        return cv2.PSNR(orig_gray, processed)
+    
+    return cv2.PSNR(orig, processed)
+
+def create_combined_plot(data, title, filename):
+    """
+    Membuat grafik perbandingan ganda: 
+    1. Bar Chart untuk Ukuran File (KB)
+    2. Line Chart untuk Kualitas Citra (PSNR dalam dB)
+    
+    Parameter:
+    data (dict): Dictionary berisi kategori dan data citra (sizes & psnrs).
+    title (str): Judul utama grafik.
+    filename (str): Nama file untuk menyimpan hasil plot.
+    """
+    labels = data['categories']
+    images = data['images']
+    
+    # Inisialisasi dua subplot (atas untuk ukuran, bawah untuk kualitas)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 12))
+    x = np.arange(len(labels))
+    width = 0.2  # Lebar batang untuk setiap sampel citra
+    
+    # --- BAGIAN 1: GRAFIK UKURAN FILE (BAR CHART) ---
+    for i, img_data in enumerate(images):
+        # Mengatur posisi batang agar tidak tumpang tindih
+        offset = (i - 1) * width
+        rects = ax1.bar(x + offset, img_data['sizes'], width, label=img_data['name'])
+        
+        # Menambahkan label angka presisi di atas setiap batang
+        ax1.bar_label(rects, padding=3, fmt='%.1f', fontsize=9)
+    
+    ax1.set_ylabel('Ukuran File (KB)')
+    ax1.set_title(f'{title} - Perbandingan Ukuran')
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels)
+    ax1.legend()
+
+    # --- BAGIAN 2: GRAFIK KUALITAS CITRA / PSNR (LINE CHART) ---
+    for i, img_data in enumerate(images):
+        # Plot garis untuk setiap sampel citra
+        line = ax2.plot(labels, img_data['psnrs'], marker='o', label=img_data['name'], linewidth=2)
+        
+        # Menambahkan label angka presisi pada setiap titik koordinat (x, y)
+        for j, val in enumerate(img_data['psnrs']):
+            ax2.annotate(f'{val:.1f}', 
+                         (labels[j], img_data['psnrs'][j]),
+                         textcoords="offset points", 
+                         xytext=(0, 10), 
+                         ha='center', 
+                         fontsize=9,
+                         fontweight='bold')
+    
+    ax2.set_ylabel('PSNR (dB)')
+    ax2.set_title(f'{title} - Perbandingan Kualitas (PSNR)')
+    
+    # Menyesuaikan batas atas sumbu Y agar label angka tidak terpotong
+    if images:
+        max_psnr = max([max(img['psnrs']) for img in images])
+        ax2.set_ylim(bottom=0, top=max_psnr * 1.2)
+        
+    ax2.grid(True, linestyle='--', alpha=0.6)
+    ax2.legend()
+
+    # Mengatur tata letak agar rapi dan tidak saling bertumpuk
+    plt.tight_layout()
+    
+    # Menyimpan grafik ke direktori hasil 
+    output_path = os.path.join(OUTPUT_DIR, filename)
+    plt.savefig(output_path)
+    print(f"Grafik berhasil disimpan: {output_path}")
 
 def process_assignment():
     image_files = [f for f in os.listdir(INPUT_DIR) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
-    
     if len(image_files) < 3:
-        print("Peringatan: Pastikan ada minimal 3 gambar di folder 'input_images'.")
+        print("Error: Masukkan minimal 3 gambar di folder 'input_images'.")
         return
 
-    # Data untuk grafik
-    plot_data = {
-        'labels': ['Original', 'Resize 50%', 'Resize 25%'],
-        'images_info': [] 
+    # Struktur Data untuk Plotting
+    results = {
+        'resize': {'categories': ['Original', '50%', '25%'], 'images': []},
+        'color': {'categories': ['Grayscale', '16-Gray', 'Biner'], 'images': []},
+        'interpolation': {'categories': ['Nearest', 'Bilinear', 'Bicubic'], 'images': []}
     }
-
-    print(f"{'File':<15} | {'Size (KB)':<10} | {'PSNR (dB)':<10}")
-    print("-" * 45)
 
     for file_name in image_files[:3]:
         path = os.path.join(INPUT_DIR, file_name)
         img = cv2.imread(path)
         if img is None: continue
-
-        f_size_orig = get_file_size(path)
-        # Benchmark kualitas gambar asli (ideal/sempurna)
-        current_sizes = [f_size_orig]
-        current_psnr = [50.0] # Representasi nilai maksimal untuk grafik
-
-        # 3. Resize 50% dan 25% serta Hitung Kualitas
-        for scale in [0.5, 0.25]:
-            resized = cv2.resize(img, None, fx=scale, fy=scale)
-            out_name = f"{int(scale*100)}_{file_name}"
-            out_path = os.path.join(OUTPUT_DIR, out_name)
-            cv2.imwrite(out_path, resized)
-            
-            current_sizes.append(get_file_size(out_path))
-            current_psnr.append(calculate_psnr(img, resized))
-
-        plot_data['images_info'].append({
-            'name': file_name, 
-            'sizes': current_sizes, 
-            'psnr': current_psnr
-        })
-
-        # 4. Konversi Warna & Kuantisasi (Tetap diproses untuk file hasil)
-        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-        cv2.imwrite(os.path.join(OUTPUT_DIR, f"gray_{file_name}"), gray)
-        gray16 = (np.floor(gray / 16) * 16).astype(np.uint8)
-        cv2.imwrite(os.path.join(OUTPUT_DIR, f"gray16_{file_name}"), gray16)
-        _, binary = cv2.threshold(gray, 127, 255, cv2.THRESH_BINARY)
-        cv2.imwrite(os.path.join(OUTPUT_DIR, f"binary_{file_name}"), binary)
         
-        print(f"{file_name:<15} | {f_size_orig:>9.1f} | {'Asli'}")
-        print(f"{'  (Resize 50%)':<15} | {current_sizes[1]:>9.1f} | {current_psnr[1]:>9.2f}")
-        print(f"{'  (Resize 25%)':<15} | {current_sizes[2]:>9.1f} | {current_psnr[2]:>9.2f}")
+        # --- 1. DATA RESIZE ---
+        res_sizes, res_psnrs = [get_file_size(path)], [50.0]
+        for sc in [0.5, 0.25]:
+            tmp = cv2.resize(img, None, fx=sc, fy=sc)
+            p = os.path.join(OUTPUT_DIR, f"resize_{int(sc*100)}_{file_name}")
+            cv2.imwrite(p, tmp)
+            res_sizes.append(get_file_size(p))
+            res_psnrs.append(calculate_psnr(img, tmp))
+        results['resize']['images'].append({'name': file_name, 'sizes': res_sizes, 'psnrs': res_psnrs})
 
-    # Buat grafik perbandingan ganda
-    create_dual_plot(plot_data)
+        # --- 2. DATA WARNA/KUANTISASI ---
+        # Untuk warna, kita bandingkan dengan versi grayscale original agar adil
+        gray_orig = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        c_sizes, c_psnrs = [], []
+        
+        # Grayscale
+        p_g = os.path.join(OUTPUT_DIR, f"gray_{file_name}")
+        cv2.imwrite(p_g, gray_orig)
+        c_sizes.append(get_file_size(p_g)); c_psnrs.append(50.0)
+        
+        # 16 Graylevel
+        g16 = (np.floor(gray_orig / 16) * 16).astype(np.uint8)
+        p_16 = os.path.join(OUTPUT_DIR, f"gray16_{file_name}")
+        cv2.imwrite(p_16, g16)
+        c_sizes.append(get_file_size(p_16)); c_psnrs.append(calculate_psnr(gray_orig, g16))
+        
+        # Biner
+        _, bin_img = cv2.threshold(gray_orig, 127, 255, cv2.THRESH_BINARY)
+        p_b = os.path.join(OUTPUT_DIR, f"binary_{file_name}")
+        cv2.imwrite(p_b, bin_img)
+        c_sizes.append(get_file_size(p_b)); c_psnrs.append(calculate_psnr(gray_orig, bin_img))
+        
+        results['color']['images'].append({'name': file_name, 'sizes': c_sizes, 'psnrs': c_psnrs})
 
-def create_dual_plot(data):
-    labels = data['labels']
-    info = data['images_info']
-    x = np.arange(len(labels))
-    width = 0.2
+        # --- 3. DATA INTERPOLASI ---
+        # Simulasi: Downscale ke 25% lalu Upscale kembali ke ukuran asli dengan 3 metode
+        small = cv2.resize(img, None, fx=0.25, fy=0.25)
+        h, w = img.shape[:2]
+        i_sizes, i_psnrs = [], []
+        
+        for name, method in [("Nearest", cv2.INTER_NEAREST), ("Bilinear", cv2.INTER_LINEAR), ("Bicubic", cv2.INTER_CUBIC)]:
+            inter = cv2.resize(small, (w, h), interpolation=method)
+            p_i = os.path.join(OUTPUT_DIR, f"inter_{name}_{file_name}")
+            cv2.imwrite(p_i, inter)
+            i_sizes.append(get_file_size(p_i))
+            i_psnrs.append(calculate_psnr(img, inter))
+            
+        results['interpolation']['images'].append({'name': file_name, 'sizes': i_sizes, 'psnrs': i_psnrs})
+        print(f"Selesai memproses: {file_name}")
+
+    # Generate 3 Grafik
+    create_combined_plot(results['resize'], "Analisis Sampling (Resize)", "grafik_1_resize.png")
+    create_combined_plot(results['color'], "Analisis Kuantisasi (Warna)", "grafik_2_warna.png")
+    create_combined_plot(results['interpolation'], "Analisis Interpolasi", "grafik_3_interpolasi.png")
     
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10))
-
-    # Grafik 1: Perbandingan Ukuran File (Bar Chart)
-    for i, item in enumerate(info):
-        ax1.bar(x + (i-1)*width, item['sizes'], width, label=item['name'])
-    ax1.set_ylabel('Ukuran File (KB)')
-    ax1.set_title('Perbandingan Efisiensi Penyimpanan (Ukuran File)')
-    ax1.set_xticks(x)
-    ax1.set_xticklabels(labels)
-    ax1.legend()
-
-    # Grafik 2: Perbandingan Kualitas (Line Chart - PSNR)
-    for i, item in enumerate(info):
-        ax2.plot(labels, item['psnr'], marker='o', label=item['name'], linewidth=2)
-    ax2.set_ylabel('PSNR (dB) - Lebih tinggi lebih baik')
-    ax2.set_title('Perbandingan Kualitas Citra (PSNR)')
-    ax2.grid(True, linestyle='--', alpha=0.7)
-    ax2.legend()
-
-    plt.tight_layout()
-    plt.savefig(os.path.join(OUTPUT_DIR, 'analisis_kualitas_dan_ukuran.png'))
-    print(f"\nSelesai! Grafik analisis disimpan di: {OUTPUT_DIR}/analisis_kualitas_dan_ukuran.png")
+    print(f"\nSemua grafik telah disimpan di folder '{OUTPUT_DIR}'.")
 
 if __name__ == "__main__":
     process_assignment()
